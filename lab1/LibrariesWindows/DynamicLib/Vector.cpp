@@ -1,6 +1,4 @@
 ﻿#include "pch.h"
-
-#define VECTOR_EXPORTS
 #include "Vector.h"
 #include "Number.h"
 #include <cmath>
