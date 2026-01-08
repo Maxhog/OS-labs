@@ -11,7 +11,8 @@ PThreadMultiplier::PThreadMultiplier() : executionTime(0), threadCount(0) {}
 PThreadMultiplier::~PThreadMultiplier() {}
 
 void PThreadMultiplier::computeBlock(const Matrix& A, const Matrix& B, Matrix& C,
-                                     int rowBlock, int colBlock, int blockSize, int N) {
+                                     int rowBlock, int colBlock, int blockSize, int N,
+                                     pthread_mutex_t* writeMutex) {
     int rowStart = rowBlock * blockSize;
     int colStart = colBlock * blockSize;
     int rowEnd = std::min(rowStart + blockSize, N);
@@ -36,11 +37,13 @@ void PThreadMultiplier::computeBlock(const Matrix& A, const Matrix& B, Matrix& C
         }
     }
     
+    pthread_mutex_lock(writeMutex);
     for (int i = rowStart; i < rowEnd; ++i) {
         for (int j = colStart; j < colEnd; ++j) {
             C(i, j) = tempBlock[i - rowStart][j - colStart];
         }
     }
+    pthread_mutex_unlock(writeMutex);
 }
 
 void* PThreadMultiplier::threadFunction(void* arg) {
@@ -66,7 +69,7 @@ void* PThreadMultiplier::threadFunction(void* arg) {
         int rowBlock = blockIdx / numBlocks;
         int colBlock = blockIdx % numBlocks;
         
-        computeBlock(A, B, C, rowBlock, colBlock, blockSize, N);
+        computeBlock(A, B, C, rowBlock, colBlock, blockSize, N, data->mutex);
     }
     
     return nullptr;
@@ -91,7 +94,7 @@ Matrix PThreadMultiplier::multiply(const Matrix& A, const Matrix& B, int blockSi
     
     Matrix result(N, N);
     
-    threadCount = totalBlocks;
+    threadCount = totalBlocks;  
     
     unsigned int maxThreads = std::thread::hardware_concurrency() * 2;
     if (maxThreads == 0) maxThreads = 8;
@@ -103,29 +106,40 @@ Matrix PThreadMultiplier::multiply(const Matrix& A, const Matrix& B, int blockSi
     auto start = std::chrono::high_resolution_clock::now();
     
     pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, nullptr);
+    if (pthread_mutex_init(&mutex, nullptr) != 0) {
+        throw std::runtime_error("Failed to initialize mutex");
+    }
+    
     int nextBlock = 0;
     
     std::vector<ThreadData> threadData(threadCount);
     std::vector<pthread_t> threads(threadCount);
     
-    for (int i = 0; i < threadCount; i++) {
-        threadData[i].A = &A;
-        threadData[i].B = &B;
-        threadData[i].C = &result;
-        threadData[i].blockSize = blockSize;
-        threadData[i].N = N;
-        threadData[i].numBlocks = numBlocks;
-        threadData[i].mutex = &mutex;
-        threadData[i].nextBlock = &nextBlock;
+    try {
+        for (int i = 0; i < threadCount; i++) {
+            threadData[i].A = &A;
+            threadData[i].B = &B;
+            threadData[i].C = &result;
+            threadData[i].blockSize = blockSize;
+            threadData[i].N = N;
+            threadData[i].numBlocks = numBlocks;
+            threadData[i].mutex = &mutex;
+            threadData[i].nextBlock = &nextBlock;
+            
+            if (pthread_create(&threads[i], nullptr, threadFunction, &threadData[i]) != 0) {
+                throw std::runtime_error("Failed to create thread");
+            }
+        }
         
-        if (pthread_create(&threads[i], nullptr, threadFunction, &threadData[i]) != 0) {
-            throw std::runtime_error("Failed to create thread");
+        for (int i = 0; i < threadCount; i++) {
+            if (pthread_join(threads[i], nullptr) != 0) {
+                throw std::runtime_error("Failed to join thread");
+            }
         }
     }
-    
-    for (int i = 0; i < threadCount; i++) {
-        pthread_join(threads[i], nullptr);
+    catch (...) {
+        pthread_mutex_destroy(&mutex);
+        throw;
     }
     
     pthread_mutex_destroy(&mutex);

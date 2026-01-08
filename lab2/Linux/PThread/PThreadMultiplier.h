@@ -23,7 +23,8 @@ private:
     
     static void* threadFunction(void* arg);
     static void computeBlock(const Matrix& A, const Matrix& B, Matrix& C,
-                            int rowBlock, int colBlock, int blockSize, int N);
+                            int rowBlock, int colBlock, int blockSize, int N,
+                            pthread_mutex_t* writeMutex); 
 
 public:
     PThreadMultiplier();
