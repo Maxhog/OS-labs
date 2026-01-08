@@ -3,7 +3,17 @@
 #include <chrono>
 #include <algorithm>
 
-WinAPIMultiplier::WinAPIMultiplier() : executionTime(0), threadCount(0) {}
+// To avoid conflict with macros min in Windows
+#undef min
+#undef max
+
+WinAPIMultiplier::WinAPIMultiplier() : executionTime(0), threadCount(0) {
+    InitializeCriticalSection(&cs);
+}
+
+WinAPIMultiplier::~WinAPIMultiplier() {
+    DeleteCriticalSection(&cs);
+}
 
 DWORD WINAPI WinAPIMultiplier::MultiplyBlockThread(LPVOID lpParam) {
     ThreadBlockData* data = static_cast<ThreadBlockData*>(lpParam);
@@ -12,24 +22,36 @@ DWORD WINAPI WinAPIMultiplier::MultiplyBlockThread(LPVOID lpParam) {
     const Matrix& B = *(data->B);
     Matrix& C = *(data->C);
     int k = data->blockSize;
-    int N = data->matrixSize;
-    int numBlocks = data->numBlocks;
+    int blockRow = data->blockRow;
+    int colBlockStart = data->colBlockStart;
+    int colBlockEnd = data->colBlockEnd;
 
-    int rowStart = data->blockRow * k;
-    int colStart = data->blockCol * k;
-    int rowEnd = (std::min)(rowStart + k, N);
-    int colEnd = (std::min)(colStart + k, N);
+    int N = C.getRows(); // Assuming square matrix
 
-    for (int i = rowStart; i < rowEnd; i++) {
-        for (int j = colStart; j < colEnd; j++) {
-            int sum = 0;
-            for (int m = 0; m < N; m++) {
-                sum += A(i, m) * B(m, j);
+    // Process multiple blocks per thread to reduce thread count
+    for (int colBlock = colBlockStart; colBlock < colBlockEnd; ++colBlock) {
+        int startRow = blockRow * k;
+        int startCol = colBlock * k;
+        int endRow = std::min(startRow + k, N);
+        int endCol = std::min(startCol + k, N);
+
+        // Calculate block
+        for (int i = startRow; i < endRow; ++i) {
+            for (int j = startCol; j < endCol; ++j) {
+                int sum = 0;
+                for (int m = 0; m < N; ++m) {
+                    sum += A(i, m) * B(m, j);
+                }
+
+                // Lock for writing
+                EnterCriticalSection(data->cs);
+                C(i, j) = sum;
+                LeaveCriticalSection(data->cs);
             }
-            C(i, j) = sum;
         }
     }
 
+    delete data;
     return 0;
 }
 
@@ -47,55 +69,87 @@ Matrix WinAPIMultiplier::multiply(const Matrix& A, const Matrix& B, int blockSiz
         throw std::invalid_argument("Matrices must be square and same size");
     }
 
-    int numBlocks = (N + blockSize - 1) / blockSize;
-    threadCount = numBlocks * numBlocks;
+    // Calculate number of blocks
+    int numBlocksPerDim = (N + blockSize - 1) / blockSize;
+
+    // Limit maximum number of threads (as in your example)
+    const int MAX_THREADS = 64;
+
+    // Distribute blocks across threads (each thread processes multiple blocks)
+    int totalBlocks = numBlocksPerDim * numBlocksPerDim;
+    int numThreads = std::min(totalBlocks, MAX_THREADS);
+    threadCount = numThreads;
+
+    // If blocks are too small, use sequential
+    if (totalBlocks > 1000) {
+        // Too many blocks, use sequential
+        auto start = std::chrono::high_resolution_clock::now();
+        Matrix result = Matrix::sequentialMultiply(A, B);
+        auto end = std::chrono::high_resolution_clock::now();
+        executionTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        return result;
+    }
 
     Matrix result(N, N);
 
-    std::vector<ThreadBlockData> threadData;
     std::vector<HANDLE> threads;
-    threadData.reserve(threadCount);
-    threads.reserve(threadCount);
+    threads.reserve(numThreads);
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int rowBlock = 0; rowBlock < numBlocks; rowBlock++) {
-        for (int colBlock = 0; colBlock < numBlocks; colBlock++) {
-            threadData.emplace_back(&A, &B, &result, rowBlock, colBlock, blockSize, N);
-            HANDLE thread = CreateThread(
-                NULL,
-                0,
-                MultiplyBlockThread,
-                &threadData.back(),
-                0,
-                NULL
-            );
+    // Create threads - each thread processes multiple blocks
+    int blocksPerThread = (totalBlocks + numThreads - 1) / numThreads;
+    int blockIndex = 0;
 
-            if (thread == NULL) {
-                std::cerr << "Error creating thread for block ["
-                    << rowBlock << "][" << colBlock
-                    << "]. Error: " << GetLastError() << std::endl;
-                threadData.pop_back();
-                continue;
-            }
+    for (int threadId = 0; threadId < numThreads && blockIndex < totalBlocks; ++threadId) {
+        int blocksThisThread = std::min(blocksPerThread, totalBlocks - blockIndex);
 
-            threads.push_back(thread);
+        // Convert block index to row and column
+        int startBlock = blockIndex;
+        blockIndex += blocksThisThread;
+
+        ThreadBlockData* data = new ThreadBlockData();
+        data->A = &A;
+        data->B = &B;
+        data->C = &result;
+        data->blockSize = blockSize;
+        data->cs = &cs;
+
+        // For simplicity, let each thread process blocks from a specific row
+        // This is simpler than distributing 2D blocks
+        int blocksPerRow = numBlocksPerDim;
+        data->blockRow = startBlock / blocksPerRow;
+        data->colBlockStart = startBlock % blocksPerRow;
+        data->colBlockEnd = std::min(data->colBlockStart + blocksThisThread, blocksPerRow);
+
+        HANDLE thread = CreateThread(
+            NULL,
+            0,
+            MultiplyBlockThread,
+            data,
+            0,
+            NULL
+        );
+
+        if (thread == NULL) {
+            delete data;
+            continue;
         }
+
+        threads.push_back(thread);
     }
 
+    // Wait for all threads to complete
     if (!threads.empty()) {
-        const DWORD MAX_WAIT = 64;
-        for (size_t i = 0; i < threads.size(); i += MAX_WAIT) {
-            size_t batchSize = (std::min<size_t>)(MAX_WAIT, threads.size() - i);
-            WaitForMultipleObjects(
-                static_cast<DWORD>(batchSize),
-                &threads[i],
-                TRUE,
-                INFINITE
-            );
-        }
+        WaitForMultipleObjects(
+            static_cast<DWORD>(threads.size()),
+            threads.data(),
+            TRUE,
+            INFINITE
+        );
     }
 
+    // Close handles
     for (HANDLE thread : threads) {
         CloseHandle(thread);
     }

@@ -4,8 +4,10 @@
 #include <random>
 #include <stdexcept>
 #include <algorithm>
-#include <cstdlib>  
-#include <ctime> 
+
+// To avoid conflict with min/max macros in Windows
+#undef min
+#undef max
 
 Matrix::Matrix() : rows(0), cols(0) {}
 
@@ -90,14 +92,13 @@ bool Matrix::equals(const Matrix& other) const {
     return true;
 }
 
-// Complexity: O(M × N × K) where M=rows of A, K=cols of A/rows of B, N=cols of B
 Matrix Matrix::sequentialMultiply(const Matrix& A, const Matrix& B) {
     if (A.cols != B.rows) {
         throw std::invalid_argument("Incompatible matrix dimensions for multiplication");
     }
 
     int M = A.rows;
-    int K = A.cols;  // Must equal B.rows
+    int K = A.cols;
     int N = B.cols;
 
     Matrix result(M, N);

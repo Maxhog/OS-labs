@@ -8,30 +8,27 @@
 struct ThreadBlockData {
     const Matrix* A;
     const Matrix* B;
-    Matrix* C;                 // result matrix
-    int blockRow;
-    int blockCol;
+    Matrix* C;
     int blockSize;
-    int matrixSize;
-    int numBlocks;
+    int blockRow;
+    int colBlockStart;
+    int colBlockEnd;
+    CRITICAL_SECTION* cs;
 
-    ThreadBlockData(const Matrix* a, const Matrix* b, Matrix* c,
-        int br, int bc, int k, int n)
-        : A(a), B(b), C(c), blockRow(br), blockCol(bc),
-        blockSize(k), matrixSize(n) {
-        numBlocks = (n + k - 1) / k;  // ceil(N/k)
-    }
+    ThreadBlockData() = default;
 };
 
 class WinAPIMultiplier {
 private:
     long long executionTime;
     int threadCount;
+    CRITICAL_SECTION cs;
 
     static DWORD WINAPI MultiplyBlockThread(LPVOID lpParam);
 
 public:
     WinAPIMultiplier();
+    ~WinAPIMultiplier();
 
     Matrix multiply(const Matrix& A, const Matrix& B, int blockSize);
 
