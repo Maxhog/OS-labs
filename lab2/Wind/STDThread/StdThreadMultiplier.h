@@ -4,19 +4,15 @@
 #include "Matrix.h"
 #include <thread>
 #include <vector>
+#include <mutex>
 
 class StdThreadMultiplier {
 private:
     long long executionTime;
     int threadCount;
 
-    struct BlockData {
-        const Matrix* A;
-        const Matrix* B;
-        Matrix* C;
-        int rowBlock, colBlock;
-        int blockSize, N;
-    };
+    static void multiplyBlock(const Matrix& A, const Matrix& B, Matrix& C,
+        int rowBlock, int colBlock, int blockSize, std::mutex& mtx);
 
 public:
     StdThreadMultiplier();

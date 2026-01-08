@@ -119,10 +119,10 @@ int main() {
     testStdThreadMultiplication(50);
     std::cout << std::endl << std::string(84, '-') << std::endl << std::endl;
 
-    testStdThreadMultiplication(100);
+    testStdThreadMultiplication(200);
     std::cout << std::endl << std::string(84, '-') << std::endl << std::endl;
 
-    testStdThreadMultiplication(200);
+    testStdThreadMultiplication(300);
 
     return 0;
 }
