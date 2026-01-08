@@ -27,3 +27,15 @@
 **/*.a
 **/*.so
 **/*.out
+
+# Разрешить файлы Visual Studio в корне
+!*.sln
+!*.vcxproj
+!*.vcxproj.filters
+!*.vcxproj.user
+
+# И в подпапках
+!**/*.sln
+!**/*.vcxproj
+!**/*.vcxproj.filters
+!**/*.vcxproj.user
